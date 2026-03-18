@@ -1,0 +1,20 @@
+import streamlit as st
+
+# Application Constants
+APP_TITLE = "AlphaStream Quant Dashboard"
+APP_ICON = "📈"
+
+# Market Lists
+DEFAULT_INDIAN_STOCKS = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS", "BHARTIARTL.NS", "SBI.NS"]
+DEFAULT_US_STOCKS = ["AAPL", "TSLA", "NVDA", "MSFT", "GOOGL", "AMZN", "META"]
+DEFAULT_CRYPTO = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "ADA/USDT"]
+
+# Technical Parameters
+RSI_PERIOD = 14
+RSI_OVERBOUGHT = 70
+RSI_OVERSOLD = 30
+SMA_FAST = 20
+SMA_SLOW = 200
+
+# UI Config
+THEME_COLOR = "#00FFAA"
