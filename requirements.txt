@@ -1,6 +1,7 @@
 streamlit==1.32.0
-pandas==2.2.0
+pandas==2.2.1
 numpy==1.26.4
 yfinance==0.2.37
 ccxt==4.2.49
 plotly==5.19.0
+Pillow==10.2.0
