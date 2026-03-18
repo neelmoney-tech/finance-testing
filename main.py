@@ -1,12 +1,19 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="QuantScanner Pro", layout="wide")
+st.set_page_config(page_title="QuantScanner Lite", layout="wide")
+
+# --- MANUAL INDICATOR MATH (Replaces pandas_ta) ---
+def calculate_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
 
 @st.cache_data(ttl=3600)
 def fetch_data(tickers):
@@ -16,119 +23,72 @@ def fetch_data(tickers):
         try:
             df = yf.download(ticker, period="2y", interval="1d", progress=False)
             if not df.empty:
-                # Basic Indicators
-                df['RSI'] = ta.rsi(df['Close'], length=14)
-                df['SMA_20'] = ta.sma(df['Close'], length=20)
-                df['SMA_200'] = ta.sma(df['Close'], length=200)
+                # Calculate indicators manually to avoid numba/llvmlite errors
+                df['SMA_20'] = df['Close'].rolling(window=20).mean()
+                df['SMA_200'] = df['Close'].rolling(window=200).mean()
+                df['RSI'] = calculate_rsi(df['Close'])
                 data[ticker] = df
-        except Exception as e:
-            pass
+        except:
+            continue
         progress_bar.progress((i + 1) / len(tickers))
     return data
 
-# --- PATTERN DETECTION FUNCTIONS ---
-
-def detect_rsi_signals(df):
-    last_rsi = df['RSI'].iloc[-1]
-    if last_rsi > 70: return "Overbought"
-    if last_rsi < 30: return "Oversold"
-    return None
-
-def detect_sma_proximity(df):
-    last_close = df['Close'].iloc[-1]
-    last_sma20 = df['SMA_20'].iloc[-1]
-    diff = abs(last_close - last_sma20) / last_sma20
-    return "Near 20 SMA" if diff <= 0.02 else None
-
-def detect_trend_alignment(df):
-    if df['SMA_20'].iloc[-1] > df['SMA_200'].iloc[-1]:
-        return "Bullish Alignment"
-    return None
-
+# --- PATTERN DETECTION ---
 def detect_vcp(df):
-    """
-    Checks for Stage 2 uptrend and decreasing volatility (High-Low range) 
-    over the last 3 chunks of 10 days.
-    """
-    if df['Close'].iloc[-1] < df['SMA_200'].iloc[-1]:
+    if len(df) < 200 or df['Close'].iloc[-1] < df['SMA_200'].iloc[-1]:
         return None
-    
     recent = df.tail(30).copy()
+    # Volatility Check: High-Low range in 10-day chunks
     waves = [recent.iloc[0:10], recent.iloc[10:20], recent.iloc[20:30]]
     ranges = [(w['High'].max() - w['Low'].min()) / w['Low'].min() for w in waves]
-    
     if ranges[0] > ranges[1] > ranges[2]:
-        return "VCP Detected"
+        return "VCP"
     return None
 
-def detect_rocket_base(df):
-    """
-    Surge of >80% in <60 days followed by 15 days of <20% consolidation.
-    """
-    surge_period = df.tail(75).head(60)
-    low_price = surge_period['Low'].min()
-    high_price = surge_period['High'].max()
-    
-    if (high_price - low_price) / low_price > 0.8:
-        base_period = df.tail(15)
-        base_range = (base_period['High'].max() - base_period['Low'].min()) / base_period['Low'].min()
-        if base_range < 0.2:
-            return "Rocket Base"
+def detect_rocket(df):
+    if len(df) < 75: return None
+    surge_zone = df.tail(75).head(60)
+    if (surge_zone['High'].max() - surge_zone['Low'].min()) / surge_zone['Low'].min() > 0.8:
+        base = df.tail(15)
+        if (base['High'].max() - base['Low'].min()) / base['Low'].min() < 0.2:
+            return "Rocket"
     return None
 
-# --- UI LOGIC ---
+# --- MAIN UI ---
+st.title("📈 Zero-Error Quant Scanner")
+st.info("System running in Lightweight Mode (No Numba/LLVMLite dependencies).")
 
-st.title("📈 QuantScanner Pro")
-st.markdown("Scan markets for high-probability setups and patterns.")
-
-# Sidebar Settings
 st.sidebar.header("Scanner Settings")
-index_choice = st.sidebar.selectbox("Select Index", ["S&P 500", "Nifty 50", "Custom"])
+tickers_input = st.sidebar.text_area("Tickers (comma separated)", "AAPL, MSFT, TSLA, NVDA, AMD, GOOGL, AMZN, NFLX")
+ticker_list = [x.strip() for x in tickers_input.split(",")]
 
-if index_choice == "S&P 500":
-    tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "BRK-B", "V", "JNJ"] # Sample list
-elif index_choice == "Nifty 50":
-    tickers = ["RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS"] # Sample list
-else:
-    custom_input = st.sidebar.text_area("Enter Tickers (comma separated)", "AAPL, TSLA, BTC-USD")
-    tickers = [x.strip() for x in custom_input.split(",")]
-
-if st.sidebar.button("Run Scanner"):
-    all_data = fetch_data(tickers)
+if st.sidebar.button("Run Global Scan"):
+    all_stocks = fetch_data(ticker_list)
     
-    results = {
-        "RSI": [], "SMA Proximity": [], "Trend Alignment": [], 
-        "VCP Pattern": [], "Rocket Base": []
-    }
+    # Categorize
+    rsi_signals = [t for t, df in all_stocks.items() if df['RSI'].iloc[-1] > 70 or df['RSI'].iloc[-1] < 30]
+    sma_near = [t for t, df in all_stocks.items() if abs(df['Close'].iloc[-1] - df['SMA_20'].iloc[-1])/df['SMA_20'].iloc[-1] < 0.02]
+    golden_cross = [t for t, df in all_stocks.items() if df['SMA_20'].iloc[-1] > df['SMA_200'].iloc[-1]]
+    vcp_list = [t for t, df in all_stocks.items() if detect_vcp(df)]
+    rocket_list = [t for t, df in all_stocks.items() if detect_rocket(df)]
 
-    for ticker, df in all_data.items():
-        if detect_rsi_signals(df): results["RSI"].append(ticker)
-        if detect_sma_proximity(df): results["SMA Proximity"].append(ticker)
-        if detect_trend_alignment(df): results["Trend Alignment"].append(ticker)
-        if detect_vcp(df): results["VCP Pattern"].append(ticker)
-        if detect_rocket_base(df): results["Rocket Base"].append(ticker)
+    t1, t2, t3, t4, t5 = st.tabs(["RSI", "Near 20 SMA", "Trend (20/200)", "VCP Pattern", "Rocket Base"])
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "🔥 RSI Signals", "📏 20 SMA Proximity", "🌊 Trend Alignment", "💎 VCP Pattern", "🚀 Rocket Base"
-    ])
-
-    def render_tab_content(tab, category, data_dict):
+    def show_content(tab, matches, label):
         with tab:
-            selected_ticker = st.selectbox(f"Select a {category} stock to view chart:", ["None"] + results[category], key=category)
-            if selected_ticker != "None":
-                df = data_dict[selected_ticker]
-                fig = go.Figure(data=[go.Candlestick(
-                    x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Price"
-                )])
-                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_20'], line=dict(color='orange', width=1), name="20 SMA"))
-                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_200'], line=dict(color='red', width=2), name="200 SMA"))
-                fig.update_layout(title=f"{selected_ticker} Technical View", height=600, template="plotly_dark")
-                st.plotly_chart(fig, use_container_width=True)
+            if not matches:
+                st.write("No stocks found matching this criteria.")
             else:
-                st.write(f"Stocks matching this criteria: {', '.join(results[category]) if results[category] else 'None found'}")
+                sel = st.selectbox(f"View {label} Chart", matches, key=label)
+                df = all_stocks[sel]
+                fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'])])
+                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_20'], name="20 SMA", line=dict(color='orange')))
+                fig.add_trace(go.Scatter(x=df.index, y=df['SMA_200'], name="200 SMA", line=dict(color='red')))
+                fig.update_layout(template="plotly_dark", height=500)
+                st.plotly_chart(fig, use_container_width=True)
 
-    render_tab_content(tab1, "RSI", all_data)
-    render_tab_content(tab2, "SMA Proximity", all_data)
-    render_tab_content(tab3, "Trend Alignment", all_data)
-    render_tab_content(tab4, "VCP Pattern", all_data)
-    render_tab_content(tab5, "Rocket Base", all_data)
+    show_content(t1, rsi_signals, "RSI")
+    show_content(t2, sma_near, "SMA20")
+    show_content(t3, golden_cross, "Trend")
+    show_content(t4, vcp_list, "VCP")
+    show_content(t5, rocket_list, "Rocket")
